@@ -13,7 +13,7 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
     /// <summary>
     /// State for input device representing a simulated XR handed controller.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 91)]
+    [StructLayout(LayoutKind.Explicit, Size = 119)]
     public struct MRTKSimulatedControllerState : IInputStateTypeInfo
     {
         /// <summary>
@@ -121,6 +121,22 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
         public Quaternion pointerRotation;
 
         /// <summary>
+        /// The device's pointer position.
+        /// </summary>
+        //[InputControl(usage = "PokePosition", noisy = true, layout = "Vector3")]
+        [InputControl(usage = "PokePosition")]
+        [FieldOffset(91)]
+        public Vector3 pokePosition;
+
+        /// <summary>
+        /// The device's poke rotation.
+        /// </summary>
+        //[InputControl(usage = "PokeRotation", noisy = true, layout = "Quaternion")]
+        [InputControl(usage = "PokeRotation")]
+        [FieldOffset(103)]
+        public Quaternion pokeRotation;
+
+        /// <summary>
         /// Set the button mask for the given <paramref name="button"/>.
         /// </summary>
         /// <param name="button">Button whose state to set.</param>
@@ -154,6 +170,8 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
             deviceRotation = Quaternion.identity;
             pointerPosition = default;
             pointerRotation = Quaternion.identity;
+            pokePosition = default;
+            pokeRotation = Quaternion.identity;
         }
     }
 }

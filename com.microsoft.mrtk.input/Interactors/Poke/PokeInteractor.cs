@@ -14,10 +14,12 @@ namespace Microsoft.MixedReality.Toolkit.Input
     /// </summary>
     [AddComponentMenu("MRTK/Input/Poke Interactor")]
     public class PokeInteractor :
-        XRBaseControllerInteractor,
+        XRPokeInteractor,
         IPokeInteractor,
         IHandedInteractor
     {
+        private XRBaseController controller = null;
+
         #region PokeInteractor
 
         [SerializeReference]
@@ -29,6 +31,15 @@ namespace Microsoft.MixedReality.Toolkit.Input
         /// The pose source representing the poke pose
         /// </summary>
         protected IPoseSource PokePoseSource { get => pokePoseSource; set => pokePoseSource = value; }
+
+        /// <summary>
+        /// The controller instance that is queried for input.
+        /// </summary>
+        public XRBaseController Controller
+        {
+            get => controller;
+            set => controller = value;
+        }
 
         /// <summary>
         /// Called during ProcessInteractor to obtain the poking pose. <see cref="XRBaseInteractor.attachTransform"/> is set to this pose.
@@ -47,7 +58,7 @@ namespace Microsoft.MixedReality.Toolkit.Input
         protected virtual bool TryGetPokeRadius(out float radius)
         {
             HandJointPose jointPose = default;
-            if (xrController is ArticulatedHandController handController
+            if (controller is ArticulatedHandController handController
                 && (XRSubsystemHelpers.HandsAggregator?.TryGetNearInteractionPoint(handController.HandNode, out jointPose) ?? false))
             {
                 radius = jointPose.Radius;
@@ -58,12 +69,21 @@ namespace Microsoft.MixedReality.Toolkit.Input
             return false;
         }
 
+
+        /// <summary>
+        /// Finds and returns the controller component in the hierarchy for this interactor.
+        /// </summary>
+        /// <returns>Returns the controller component if found, otherwise <see langword="null"/>.</returns>
+        private XRBaseController FindControllerComponent()
+        {
+            return gameObject.GetComponentInParent<XRBaseController>(true);
+        }
         #endregion PokeInteractor
 
         #region IHandedInteractor
 
         /// <inheritdoc />
-        Handedness IHandedInteractor.Handedness => (xrController is ArticulatedHandController handController) ? handController.HandNode.ToHandedness() : Handedness.None;
+        Handedness IHandedInteractor.Handedness => (controller is ArticulatedHandController handController) ? handController.HandNode.ToHandedness() : Handedness.None;
 
         #endregion IHandedInteractor
 
@@ -90,6 +110,14 @@ namespace Microsoft.MixedReality.Toolkit.Input
         protected override void Awake()
         {
             base.Awake();
+
+            // Setup interaction controller (for sending down selection state and input)
+            controller = FindControllerComponent();
+            if (controller == null)
+            {
+                Debug.LogWarning($"Could not find {nameof(XRBaseController)} component on {gameObject} or any of its parents.", this);
+            }
+
             pokeTrajectory.Start = attachTransform.position;
             pokeTrajectory.End = attachTransform.position;
         }
@@ -106,11 +134,11 @@ namespace Microsoft.MixedReality.Toolkit.Input
         #region XRBaseInteractor
 
         /// <inheritdoc />
-        public override void GetValidTargets(List<IXRInteractable> targets)
-        {
-            targets.Clear();
-            targets.AddRange(this.targets);
-        }
+        //public override void GetValidTargets(List<IXRInteractable> targets)
+        //{
+        //    targets.Clear();
+        //    targets.AddRange(this.targets);
+        //}
 
         // Was our poking point tracked the last time we checked?
         // This will drive isHoverActive.
@@ -120,7 +148,7 @@ namespace Microsoft.MixedReality.Toolkit.Input
         public override bool isHoverActive
         {
             // Only be available for hovering if the joint or controller is tracked.
-            get => base.isHoverActive && (xrController.currentControllerState.inputTrackingState.HasPositionAndRotation() || pokePointTracked);
+            get => base.isHoverActive && ((controller != null && controller.currentControllerState.inputTrackingState.HasPositionAndRotation()) || pokePointTracked);
         }
 
         /// <inheritdoc/>
@@ -138,82 +166,118 @@ namespace Microsoft.MixedReality.Toolkit.Input
         private static readonly ProfilerMarker ProcessInteractorPerfMarker =
             new ProfilerMarker("[MRTK] PokeInteractor.ProcessInteractor");
 
+
         /// <inheritdoc />
-        public override void ProcessInteractor(XRInteractionUpdateOrder.UpdatePhase updatePhase)
+        public override void PreprocessInteractor(XRInteractionUpdateOrder.UpdatePhase updatePhase)
         {
-            base.ProcessInteractor(updatePhase);
 
-            using (ProcessInteractorPerfMarker.Auto())
+            if (updatePhase == XRInteractionUpdateOrder.UpdatePhase.Dynamic)
             {
-                if (updatePhase == XRInteractionUpdateOrder.UpdatePhase.Dynamic)
+                // The start of our new trajectory is the end of the last frame's trajectory.
+                pokeTrajectory.Start = pokeTrajectory.End;
+
+                // pokePointTracked is used to help set isHoverActive.
+                pokePointTracked = TryGetPokePose(out Pose pose) && TryGetPokeRadius(out pokeRadius);
+                if (pokePointTracked)
                 {
-                    // The start of our new trajectory is the end of the last frame's trajectory.
-                    pokeTrajectory.Start = pokeTrajectory.End;
-
-                    // pokePointTracked is used to help set isHoverActive.
-                    pokePointTracked = TryGetPokePose(out Pose pose) && TryGetPokeRadius(out pokeRadius);
-                    if (pokePointTracked)
-                    {
-                        // If we can get a joint pose, set our transform accordingly.
-                        transform.SetPositionAndRotation(pose.position, pose.rotation);
-                    }
-                    else
-                    {
-                        // If we don't have a poke pose, reset to whatever our parent XRController's pose is.
-                        transform.localPosition = Vector3.zero;
-                        transform.localRotation = Quaternion.identity;
-                    }
-
-                    // Ensure that the attachTransform tightly follows the interactor's transform
-                    attachTransform.SetPositionAndRotation(transform.position, transform.rotation);
-
-                    // The endpoint of our trajectory is the current attachTransform, regardless
-                    // if this interactor set the attachTransform or whether we are just on a motion controller.
-                    pokeTrajectory.End = attachTransform.position;
-
-                    targets.Clear();
-
-                    // If the trajectory is essentially stationary, we'll do a sphere overlap instead.
-                    // SphereCasts return nothing if the start/end are the same.
-                    if ((pokeTrajectory.End - pokeTrajectory.Start).sqrMagnitude <= 0.0001f)
-                    {
-                        int numOverlaps = UnityEngine.Physics.OverlapSphereNonAlloc(pokeTrajectory.End, PokeRadius, overlaps, UnityEngine.Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-
-                        for (int i = 0; i < numOverlaps; i++)
-                        {
-                            // Add intersections to target list.
-                            if (interactionManager.TryGetInteractableForCollider(overlaps[i], out IXRInteractable interactable))
-                            {
-                                targets.Add(interactable);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Otherwise, we perform a spherecast (essentially, a thick raycast)
-                        // from the start to the end of the recorded trajectory, with a radius/thickness
-                        // corresponding to the joint radius.
-                        int numHits = UnityEngine.Physics.SphereCastNonAlloc(
-                            pokeTrajectory.Start,
-                            PokeRadius,
-                            (pokeTrajectory.End - pokeTrajectory.Start).normalized,
-                            results,
-                            (pokeTrajectory.End - pokeTrajectory.Start).magnitude,
-                            UnityEngine.Physics.DefaultRaycastLayers,
-                            QueryTriggerInteraction.Ignore);
-
-                        for (int i = 0; i < numHits; i++)
-                        {
-                            // Add intersections to target list.
-                            if (interactionManager.TryGetInteractableForCollider(results[i].collider, out IXRInteractable interactable))
-                            {
-                                targets.Add(interactable);
-                            }
-                        }
-                    }
+                    // If we can get a joint pose, set our transform accordingly.
+                    transform.SetPositionAndRotation(pose.position, pose.rotation);
                 }
+                else
+                {
+                    // If we don't have a poke pose, reset to whatever our parent XRController's pose is.
+                    transform.localPosition = Vector3.zero;
+                    transform.localRotation = Quaternion.identity;
+                }
+
+                // Ensure that the attachTransform tightly follows the interactor's transform
+                attachTransform.SetPositionAndRotation(transform.position, transform.rotation);
+
+                // The endpoint of our trajectory is the current attachTransform, regardless
+                // if this interactor set the attachTransform or whether we are just on a motion controller.
+                pokeTrajectory.End = attachTransform.position;
+
             }
+
+            base.PreprocessInteractor(updatePhase);
         }
+
+        ///// <inheritdoc />
+        //public override void ProcessInteractor(XRInteractionUpdateOrder.UpdatePhase updatePhase)
+        //{
+        //    base.ProcessInteractor(updatePhase);
+
+        //    using (ProcessInteractorPerfMarker.Auto())
+        //    {
+        //        if (updatePhase == XRInteractionUpdateOrder.UpdatePhase.Dynamic)
+        //        {
+        //            // The start of our new trajectory is the end of the last frame's trajectory.
+        //            pokeTrajectory.Start = pokeTrajectory.End;
+
+        //            // pokePointTracked is used to help set isHoverActive.
+        //            pokePointTracked = TryGetPokePose(out Pose pose) && TryGetPokeRadius(out pokeRadius);
+        //            if (pokePointTracked)
+        //            {
+        //                // If we can get a joint pose, set our transform accordingly.
+        //                transform.SetPositionAndRotation(pose.position, pose.rotation);
+        //            }
+        //            else
+        //            {
+        //                // If we don't have a poke pose, reset to whatever our parent XRController's pose is.
+        //                transform.localPosition = Vector3.zero;
+        //                transform.localRotation = Quaternion.identity;
+        //            }
+
+        //            // Ensure that the attachTransform tightly follows the interactor's transform
+        //            attachTransform.SetPositionAndRotation(transform.position, transform.rotation);
+
+        //            // The endpoint of our trajectory is the current attachTransform, regardless
+        //            // if this interactor set the attachTransform or whether we are just on a motion controller.
+        //            pokeTrajectory.End = attachTransform.position;
+
+        //            targets.Clear();
+
+        //            // If the trajectory is essentially stationary, we'll do a sphere overlap instead.
+        //            // SphereCasts return nothing if the start/end are the same.
+        //            if ((pokeTrajectory.End - pokeTrajectory.Start).sqrMagnitude <= 0.0001f)
+        //            {
+        //                int numOverlaps = UnityEngine.Physics.OverlapSphereNonAlloc(pokeTrajectory.End, PokeRadius, overlaps, UnityEngine.Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+
+        //                for (int i = 0; i < numOverlaps; i++)
+        //                {
+        //                    // Add intersections to target list.
+        //                    if (interactionManager.TryGetInteractableForCollider(overlaps[i], out IXRInteractable interactable))
+        //                    {
+        //                        targets.Add(interactable);
+        //                    }
+        //                }
+        //            }
+        //            else
+        //            {
+        //                // Otherwise, we perform a spherecast (essentially, a thick raycast)
+        //                // from the start to the end of the recorded trajectory, with a radius/thickness
+        //                // corresponding to the joint radius.
+        //                int numHits = UnityEngine.Physics.SphereCastNonAlloc(
+        //                    pokeTrajectory.Start,
+        //                    PokeRadius,
+        //                    (pokeTrajectory.End - pokeTrajectory.Start).normalized,
+        //                    results,
+        //                    (pokeTrajectory.End - pokeTrajectory.Start).magnitude,
+        //                    UnityEngine.Physics.DefaultRaycastLayers,
+        //                    QueryTriggerInteraction.Ignore);
+
+        //                for (int i = 0; i < numHits; i++)
+        //                {
+        //                    // Add intersections to target list.
+        //                    if (interactionManager.TryGetInteractableForCollider(results[i].collider, out IXRInteractable interactable))
+        //                    {
+        //                        targets.Add(interactable);
+        //                    }
+        //                }
+        //            }
+        //        }
+        //    }
+        //}
 
         #endregion XRBaseInteractor
     }

@@ -44,12 +44,24 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
         /// </summary>
         public QuaternionControl PointerRotation { get; private set; }
 
+        /// <summary>
+        /// The device's pokePosition
+        /// </summary>
+        public Vector3Control PokePosition { get; private set; }
+
+        /// <summary>
+        /// The device's pokeRotation
+        /// </summary>
+        public QuaternionControl PokeRotation { get; private set; }
+
         protected override void FinishSetup()
         {
             base.FinishSetup();
 
             PointerPosition = GetChildControl<Vector3Control>(nameof(PointerPosition));
             PointerRotation = GetChildControl<QuaternionControl>(nameof(PointerRotation));
+            PokePosition = GetChildControl<Vector3Control>(nameof(PokePosition));
+            PokeRotation = GetChildControl<QuaternionControl>(nameof(PokeRotation));
         }
 
         /// <inheritdoc />
@@ -555,7 +567,8 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
                 if (shouldUseRayVector && Handedness.ToXRNode().HasValue &&
                     XRSubsystemHelpers.HandsAggregator != null &&
                     XRSubsystemHelpers.HandsAggregator.TryGetJoint(TrackedHandJoint.Palm, Handedness.ToXRNode().Value, out HandJointPose palmPose) &&
-                    XRSubsystemHelpers.HandsAggregator.TryGetJoint(TrackedHandJoint.IndexProximal, Handedness.ToXRNode().Value, out HandJointPose knucklePose))
+                    XRSubsystemHelpers.HandsAggregator.TryGetJoint(TrackedHandJoint.IndexProximal, Handedness.ToXRNode().Value, out HandJointPose knucklePose) &&
+                    XRSubsystemHelpers.HandsAggregator.TryGetJoint(TrackedHandJoint.IndexTip, Handedness.ToXRNode().Value, out HandJointPose pokePose))
                 {
                     // If prompted to use the ray vector, this pose is calculated by simulating a hand ray.
                     handRay.Update(
@@ -572,12 +585,21 @@ namespace Microsoft.MixedReality.Toolkit.Input.Simulation
 
                     simulatedControllerState.pointerPosition = localRayPose.position;
                     simulatedControllerState.pointerRotation = localRayPose.rotation;
+
+                    // Transform world pose back into local pose.
+                    Pose localPokePose = PlayspaceUtilities.InverseTransformPose(pokePose);
+
+                    simulatedControllerState.pokePosition = localPokePose.position;
+                    simulatedControllerState.pokeRotation = localPokePose.rotation;
                 }
                 else
                 {
                     // Otherwise, set the pointer pose to match the device pose.
                     simulatedControllerState.pointerPosition = simulatedControllerState.devicePosition;
                     simulatedControllerState.pointerRotation = simulatedControllerState.deviceRotation;
+                    simulatedControllerState.pokePosition = Vector3.zero;
+                    simulatedControllerState.pokeRotation = Quaternion.identity;
+
                 }
 
             }

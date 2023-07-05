@@ -210,24 +210,23 @@ namespace Microsoft.MixedReality.Toolkit.Input
                 return;
             }
 
-            GameObject controllerObject = null;
-            if (interactor is XRBaseControllerInteractor controllerInteractor)
-            {
-                controllerObject = controllerInteractor.xrController.gameObject;
-            }
-            if (interactor is IModeManagedInteractor modeManagedInteractor)
-            {
-                controllerObject = modeManagedInteractor.GetModeManagedController();
-            }
+            GameObject controllerObject = FindControllerComponent(interactor);
 
-            if (!controllerMapping.ContainsKey(controllerObject))
+            if (controllerObject == null)
+            {
+                Debug.LogError("The interaction mode manager only works will control based interactors. The interactor '{interactor}` does not have a control.");
+            }
+            else if (!controllerMapping.ContainsKey(controllerObject))
             {
                 controllerMapping.Add(controllerObject, new ManagedInteractorStatus());
             }
 
             if (!registeredControllerInteractors.Contains(interactor))
             {
-                controllerMapping[controllerObject].Interactors.Add(interactor);
+                if (controllerObject != null)
+                {
+                    controllerMapping[controllerObject].Interactors.Add(interactor);
+                }
                 registeredControllerInteractors.Add(interactor);
             }
         }
@@ -244,17 +243,10 @@ namespace Microsoft.MixedReality.Toolkit.Input
         /// <param name="controllerInteractor">The XRBaseInteractor to be unregistered</param>
         public void UnregisterInteractor(XRBaseInteractor interactor)
         {
-            GameObject controllerObject = null;
-            if (interactor is XRBaseControllerInteractor controllerInteractor)
-            {
-                controllerObject = controllerInteractor.xrController.gameObject;
-            }
-            if (interactor is IModeManagedInteractor modeManagedInteractor)
-            {
-                controllerObject = modeManagedInteractor.GetModeManagedController();
-            }
+            GameObject controllerObject = FindControllerComponent(interactor);
 
-            if (controllerMapping.TryGetValue(controllerObject, out ManagedInteractorStatus controllerInteractorStatus))
+            if (controllerObject != null &&
+                controllerMapping.TryGetValue(controllerObject, out ManagedInteractorStatus controllerInteractorStatus))
             {
                 controllerInteractorStatus.Interactors.Remove(interactor);
             }
@@ -304,6 +296,34 @@ namespace Microsoft.MixedReality.Toolkit.Input
                 Debug.LogError($"Duplicate interaction mode definitions detected in the interaction mode manager on {gameObject.name}. " +
                                     $"Please check the following interaction modes: {duplicatedNameString}");
             }
+        }
+
+        /// <summary>
+        /// Finds and returns the controller component in the hierarchy for this interactor.
+        /// </summary>
+        /// <returns>Returns the controller component if found, otherwise <see langword="null"/>.</returns>
+        private GameObject FindControllerComponent(XRBaseInteractor interactor)
+        {
+
+            GameObject controllerObject = null;
+            if (interactor is XRBaseControllerInteractor controllerInteractor)
+            {
+                controllerObject = controllerInteractor.xrController.gameObject;
+            }
+            else if (interactor is IModeManagedInteractor modeManagedInteractor)
+            {
+                controllerObject = modeManagedInteractor.GetModeManagedController();
+            }
+            else
+            {
+                var controller = interactor.gameObject.GetComponentInParent<XRBaseController>(includeInactive: true);
+                if (controller != null)
+                {
+                    controllerObject = controller.gameObject;
+                }
+            }
+
+            return controllerObject;
         }
 
         /// <summary>
